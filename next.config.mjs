@@ -1,7 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // Add any other specific configurations your app needs here
+  images: {
+    unoptimized: true, // Tells Netlify to serve your logo directly without optimization
+  },
 };
 
 export default nextConfig;
