@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '../../utils/supabase';
+import { verifyAdminPassword } from './actions';
 
 interface Application {
   id: number;
@@ -19,13 +20,32 @@ interface Application {
 }
 
 export default function AdminDashboard() {
+  // Authentication States
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // Dashboard States
   const [apps, setApps] = useState<Application[]>([]);
   const [filterMode, setFilterMode] = useState<'All' | 'New' | 'Reviewed'>('All');
   const [selectedApp, setSelectedApp] = useState<Application | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // 🔥 UPDATED: Fetch applications from the global Supabase database
+  // 1. Check if the user is already logged in for this session
   useEffect(() => {
+    const sessionAuth = sessionStorage.getItem('safety_admin_auth');
+    if (sessionAuth === 'true') {
+      setIsAuthenticated(true);
+    }
+    setIsCheckingAuth(false);
+  }, []);
+
+  // 2. Fetch Supabase Data (Only runs if authenticated)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
     const fetchApplications = async () => {
       setIsLoading(true);
       const { data, error } = await supabase
@@ -42,25 +62,39 @@ export default function AdminDashboard() {
     };
 
     fetchApplications();
-  }, []);
+  }, [isAuthenticated]);
 
-  // 🔥 UPDATED: Update the reviewed status directly in Supabase
+  // Handle Login Submission
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoggingIn(true);
+    setLoginError('');
+
+    // Securely checks the password on the server side via our server action
+    const isCorrect = await verifyAdminPassword(passwordInput);
+
+    if (isCorrect) {
+      sessionStorage.setItem('safety_admin_auth', 'true');
+      setIsAuthenticated(true);
+    } else {
+      setLoginError('Invalid security credentials. Please try again.');
+      setPasswordInput('');
+    }
+    setIsLoggingIn(false);
+  };
+
   const toggleReviewStatus = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    
-    // Find the current app to toggle its state
     const targetApp = apps.find(app => app.id === id);
     if (!targetApp) return;
 
     const newReviewedStatus = !targetApp.reviewed;
 
-    // 1. Optimistic UI update (feels instant)
     setApps(apps.map(app => app.id === id ? { ...app, reviewed: newReviewedStatus } : app));
     if (selectedApp && selectedApp.id === id) {
       setSelectedApp({ ...selectedApp, reviewed: newReviewedStatus });
     }
 
-    // 2. Push change to Database
     const { error } = await supabase
       .from('loan_applications')
       .update({ reviewed: newReviewedStatus })
@@ -68,7 +102,6 @@ export default function AdminDashboard() {
 
     if (error) {
       console.error("Failed to update status:", error);
-      // Revert UI if database fails
       setApps(apps.map(app => app.id === id ? { ...app, reviewed: targetApp.reviewed } : app));
       if (selectedApp && selectedApp.id === id) setSelectedApp({ ...selectedApp, reviewed: targetApp.reviewed });
     }
@@ -98,6 +131,68 @@ export default function AdminDashboard() {
     transition: 'all 0.15s ease'
   });
 
+  // ==========================================
+  // VIEW 1: PRE-LOADER (Prevents screen flashing)
+  // ==========================================
+  if (isCheckingAuth) {
+    return <div style={{ minHeight: '100vh', backgroundColor: '#0f172a' }}></div>;
+  }
+
+  // ==========================================
+  // VIEW 2: SECURE LOGIN SCREEN
+  // ==========================================
+  if (!isAuthenticated) {
+    return (
+      <div style={{ backgroundColor: '#0f172a', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', backgroundImage: 'radial-gradient(circle at center, #1e293b 0%, #0f172a 100%)' }}>
+        <div style={{ backgroundColor: '#ffffff', padding: '40px', borderRadius: '12px', width: '100%', maxWidth: '420px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }}>
+          <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+            <img src="/logo.png" alt="Safety Financial Logo" width="60" height="60" style={{ objectFit: 'contain', marginBottom: '10px' }} />
+            <h2 style={{ margin: 0, color: '#0f172a', fontSize: '1.5rem', fontWeight: '800' }}>Admin Portal Access</h2>
+            <p style={{ margin: '8px 0 0 0', color: '#64748b', fontSize: '0.9rem' }}>Please enter your security credentials to access the underwriting pipeline.</p>
+          </div>
+
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {loginError && (
+              <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', color: '#ef4444', padding: '12px', borderRadius: '6px', fontSize: '0.85rem', fontWeight: '600', textAlign: 'center' }}>
+                {loginError}
+              </div>
+            )}
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '700', color: '#334155', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Master Password
+              </label>
+              <input 
+                type="password" 
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                required
+                autoFocus
+                placeholder="••••••••••••"
+                style={{ width: '100%', padding: '14px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '1rem', boxSizing: 'border-box', outlineColor: '#0b63b6' }}
+              />
+            </div>
+            <button 
+              type="submit" 
+              disabled={isLoggingIn}
+              style={{ background: '#f05a28', color: '#ffffff', padding: '14px', border: 'none', borderRadius: '6px', fontWeight: '800', fontSize: '1rem', cursor: isLoggingIn ? 'not-allowed' : 'pointer', transition: 'opacity 0.2s', opacity: isLoggingIn ? 0.7 : 1, marginTop: '10px', boxShadow: '0 4px 14px rgba(240, 90, 40, 0.3)' }}
+            >
+              {isLoggingIn ? 'Verifying...' : 'Secure Login →'}
+            </button>
+          </form>
+          
+          <div style={{ textAlign: 'center', marginTop: '24px' }}>
+            <Link href="/" style={{ color: '#94a3b8', fontSize: '0.85rem', textDecoration: 'none', fontWeight: '600' }}>
+              ← Return to public website
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // VIEW 3: SECURE DASHBOARD (Only renders if authenticated)
+  // ==========================================
   return (
     <div style={{ backgroundColor: '#f8fafc', minHeight: '100vh', display: 'flex', width: '100%', boxSizing: 'border-box' }}>
       
@@ -125,18 +220,23 @@ export default function AdminDashboard() {
           </nav>
         </div>
 
-        <div style={{ borderTop: '1px solid #1e293b', paddingTop: '16px', paddingLeft: '8px', paddingRight: '8px' }}>
-          <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#ffffff', textDecoration: 'none', fontSize: '0.9rem', fontWeight: '700', transition: 'opacity 0.2s' }}
-            onMouseEnter={(e) => e.currentTarget.style.opacity = '0.8'}
-            onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+        <div style={{ borderTop: '1px solid #1e293b', paddingTop: '16px', paddingLeft: '8px', paddingRight: '8px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <button 
+            onClick={() => {
+              sessionStorage.removeItem('safety_admin_auth');
+              setIsAuthenticated(false);
+            }} 
+            style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#f87171', background: 'none', border: 'none', fontSize: '0.9rem', fontWeight: '700', cursor: 'pointer', padding: 0, textAlign: 'left' }}
           >
+            🔒 Lock & Sign Out
+          </button>
+          <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#94a3b8', textDecoration: 'none', fontSize: '0.85rem', fontWeight: '600' }}>
             ↩ Go to Home Website
           </Link>
         </div>
       </aside>
 
       <div style={{ flex: '1', paddingLeft: '260px', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', width: '100%' }}>
-        
         <div style={{ backgroundColor: '#ffffff', padding: '24px 5%', borderBottom: '1px solid #e2e8f0' }}>
           <h2 style={{ margin: '0', color: '#0f172a', fontSize: '1.4rem', fontWeight: '800', letterSpacing: '-0.5px' }}>
             {filterMode === 'All' ? 'All Received Files' : filterMode === 'New' ? 'New Files Requiring Action' : 'Reviewed Files Archive'}
