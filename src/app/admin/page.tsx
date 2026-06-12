@@ -1,10 +1,11 @@
 'use client';
 import React, { useEffect, useState } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
+import { supabase } from '../../utils/supabase';
 
 interface Application {
   id: number;
+  created_at?: string;
   fullName: string;
   idNumber: string;
   phone: string;
@@ -14,7 +15,6 @@ interface Application {
   collateralDetails: string;
   projectSummary: string;
   reviewed: boolean;
-  date: string;
   uploadedFiles?: { [key: string]: string };
 }
 
@@ -22,86 +22,55 @@ export default function AdminDashboard() {
   const [apps, setApps] = useState<Application[]>([]);
   const [filterMode, setFilterMode] = useState<'All' | 'New' | 'Reviewed'>('All');
   const [selectedApp, setSelectedApp] = useState<Application | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
+  // 🔥 UPDATED: Fetch applications from the global Supabase database
   useEffect(() => {
-    const savedAppsStr = localStorage.getItem('loan_applications');
-    let parsedApps: Application[] = savedAppsStr ? JSON.parse(savedAppsStr) : [];
+    const fetchApplications = async () => {
+      setIsLoading(true);
+      const { data, error } = await supabase
+        .from('loan_applications')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-    // FORCE INITIAL SEED OVERRIDE: 
-    // If local storage is empty OR contains old cached items missing the 'loanAmount' parameter, force refresh the database
-    const needsFreshSeed = parsedApps.length === 0 || parsedApps.some(app => !app.loanAmount);
+      if (error) {
+        console.error("Error fetching data:", error);
+      } else if (data) {
+        setApps(data);
+      }
+      setIsLoading(false);
+    };
 
-    if (!needsFreshSeed) {
-      setApps(parsedApps);
-    } else {
-      const sampleData: Application[] = [
-        {
-          id: 1024,
-          fullName: "Jean Paul Nkurunziza",
-          idNumber: "1199580023456108",
-          phone: "0788123456",
-          email: "jeanpaul@gmail.com",
-          loanType: "Salary-Based Loans",
-          loanAmount: "1,500,000 RWF",
-          collateralDetails: "Kigali House Parcel UPI 1/02/03/445",
-          projectSummary: "Home improvement and structural roofing renovation expansion.",
-          reviewed: false,
-          date: "5/14/2026",
-          uploadedFiles: {
-            "Collateral (e.g., House, Land, etc.)": "UPI_Title_Deed_Kigali.pdf",
-            "Copy of your National ID": "ID_Nkurunziza.jpg",
-            "A document confirming your marital status": "Celibacy_Certificate.pdf"
-          }
-        },
-        {
-          id: 1025,
-          fullName: "Marie Claire Uwase",
-          idNumber: "1199270145678192",
-          phone: "0785987654",
-          email: "claire.uwase@yahoo.com",
-          loanType: "Agriculture and Farming Loan",
-          loanAmount: "3,000,000 RWF",
-          collateralDetails: "Eastern Province Farm Land UPI 5/08/12/002",
-          projectSummary: "Purchase of high-yield farming seeds and irrigation pumps for seasonal scaling.",
-          reviewed: true,
-          date: "5/16/2026",
-          uploadedFiles: {
-            "Collateral (e.g., House, Land, etc.)": "Farm_Land_Register.pdf",
-            "Copy of your National ID": "ID_Uwase_Claire.jpg",
-            "Collateral valuation report": "Valuation_Report_2026.pdf"
-          }
-        },
-        {
-          id: 1026,
-          fullName: "Eric Mutanguha",
-          idNumber: "1198880098765123",
-          phone: "0794123987",
-          email: "eric.mutanguha@outlook.com",
-          loanType: "Car Purchase Loans",
-          loanAmount: "7,500,000 RWF",
-          collateralDetails: "Commercial Warehouse Plot UPI 3/01/09/771",
-          projectSummary: "Financing a utility delivery truck to expand business logistics pipelines.",
-          reviewed: false,
-          date: "5/18/2026",
-          uploadedFiles: {
-            "Collateral (e.g., House, Land, etc.)": "Warehouse_Deed.pdf",
-            "Copy of your National ID": "ID_Mutanguha_Eric.jpg"
-          }
-        }
-      ];
-      setApps(sampleData);
-      localStorage.setItem('loan_applications', JSON.stringify(sampleData));
-    }
+    fetchApplications();
   }, []);
 
-  const toggleReviewStatus = (id: number, e: React.MouseEvent) => {
+  // 🔥 UPDATED: Update the reviewed status directly in Supabase
+  const toggleReviewStatus = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    const updated = apps.map(app => app.id === id ? { ...app, reviewed: !app.reviewed } : app);
-    setApps(updated);
-    localStorage.setItem('loan_applications', JSON.stringify(updated));
     
+    // Find the current app to toggle its state
+    const targetApp = apps.find(app => app.id === id);
+    if (!targetApp) return;
+
+    const newReviewedStatus = !targetApp.reviewed;
+
+    // 1. Optimistic UI update (feels instant)
+    setApps(apps.map(app => app.id === id ? { ...app, reviewed: newReviewedStatus } : app));
     if (selectedApp && selectedApp.id === id) {
-      setSelectedApp({ ...selectedApp, reviewed: !selectedApp.reviewed });
+      setSelectedApp({ ...selectedApp, reviewed: newReviewedStatus });
+    }
+
+    // 2. Push change to Database
+    const { error } = await supabase
+      .from('loan_applications')
+      .update({ reviewed: newReviewedStatus })
+      .eq('id', id);
+
+    if (error) {
+      console.error("Failed to update status:", error);
+      // Revert UI if database fails
+      setApps(apps.map(app => app.id === id ? { ...app, reviewed: targetApp.reviewed } : app));
+      if (selectedApp && selectedApp.id === id) setSelectedApp({ ...selectedApp, reviewed: targetApp.reviewed });
     }
   };
 
@@ -132,24 +101,10 @@ export default function AdminDashboard() {
   return (
     <div style={{ backgroundColor: '#f8fafc', minHeight: '100vh', display: 'flex', width: '100%', boxSizing: 'border-box' }}>
       
-      {/* 1. SIDEBAR PANEL */}
-      <aside style={{
-        width: '260px',
-        backgroundColor: '#0f172a',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'space-between',
-        padding: '30px 16px',
-        boxSizing: 'border-box',
-        position: 'fixed',
-        top: 0,
-        bottom: 0,
-        left: 0,
-        zIndex: 100
-      }}>
+      <aside style={{ width: '260px', backgroundColor: '#0f172a', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '30px 16px', boxSizing: 'border-box', position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 100 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '35px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '0 8px' }}>
-            <Image src="/logo.png" alt="Safety Financial Logo" width={38} height={38} style={{ objectFit: 'contain' }} />
+            <img src="/logo.png" alt="Safety Financial Logo" width="38" height="38" style={{ objectFit: 'contain' }} />
             <div>
               <h3 style={{ margin: 0, color: '#ffffff', fontSize: '1rem', fontWeight: '800', letterSpacing: '-0.3px' }}>SAFETY FINANCIAL</h3>
               <span style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: '700', textTransform: 'uppercase' }}>Management Portal</span>
@@ -180,11 +135,10 @@ export default function AdminDashboard() {
         </div>
       </aside>
 
-      {/* 2. MAIN LEDGER CONTAINER VIEWPORTS */}
       <div style={{ flex: '1', paddingLeft: '260px', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', width: '100%' }}>
         
         <div style={{ backgroundColor: '#ffffff', padding: '24px 5%', borderBottom: '1px solid #e2e8f0' }}>
-          <h2 style={{ margin: 0, color: '#0f172a', fontSize: '1.4rem', fontWeight: '800', letterSpacing: '-0.5px' }}>
+          <h2 style={{ margin: '0', color: '#0f172a', fontSize: '1.4rem', fontWeight: '800', letterSpacing: '-0.5px' }}>
             {filterMode === 'All' ? 'All Received Files' : filterMode === 'New' ? 'New Files Requiring Action' : 'Reviewed Files Archive'}
           </h2>
           <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '0.85rem', fontWeight: '500' }}>
@@ -192,7 +146,6 @@ export default function AdminDashboard() {
           </p>
         </div>
 
-        {/* LEDGER DATA TABLE */}
         <div style={{ padding: '30px 5%', boxSizing: 'border-box', width: '100%' }}>
           <div style={{ backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.01)', overflow: 'hidden' }}>
             <div style={{ overflowX: 'auto', width: '100%' }}>
@@ -207,7 +160,13 @@ export default function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {displayedApps.length === 0 ? (
+                  {isLoading ? (
+                    <tr>
+                      <td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: '#94a3b8', fontWeight: 'bold' }}>
+                        Loading Global Pipeline Data...
+                      </td>
+                    </tr>
+                  ) : displayedApps.length === 0 ? (
                     <tr>
                       <td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: '#94a3b8', fontStyle: 'italic' }}>
                         No portfolio files currently populate this filtered pipeline queue view.
@@ -258,20 +217,9 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* DETAILS MODAL REVIEW POP-UP */}
         {selectedApp && (
-          <div style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(4px)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999
-          }} onClick={() => setSelectedApp(null)}>
-            
-            <div style={{
-              backgroundColor: '#ffffff', borderRadius: '12px', padding: '35px',
-              width: '90%', maxWidth: '650px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
-              border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '20px',
-              maxHeight: '85vh', overflowY: 'auto'
-            }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setSelectedApp(null)}>
+            <div style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '35px', width: '90%', maxWidth: '650px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '20px', maxHeight: '85vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
               
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f1f5f9', paddingBottom: '16px' }}>
                 <div>
@@ -305,7 +253,7 @@ export default function AdminDashboard() {
                           <p style={{ margin: '0 0 2px 0', fontWeight: '700', color: '#475569', fontSize: '0.8rem' }}>{label}</p>
                           <span style={{ color: '#0b63b6', fontWeight: '500' }}>📄 {name}</span>
                         </div>
-                        <span style={{ fontSize: '0.75rem', fontWeight: '700', color: '#10b981', backgroundColor: '#d1fae5', padding: '2px 8px', borderRadius: '4px' }}>Secure</span>
+                        <span style={{ fontSize: '0.75rem', fontWeight: '700', color: '#10b981', backgroundColor: '#d1fae5', padding: '2px 8px', borderRadius: '4px' }}>Logged</span>
                       </div>
                     ))}
                   </div>
@@ -315,11 +263,7 @@ export default function AdminDashboard() {
               <div style={{ display: 'flex', gap: '12px', marginTop: '10px', borderTop: '1px solid #f1f5f9', paddingTop: '16px' }}>
                 <button 
                   onClick={(e) => { toggleReviewStatus(selectedApp.id, e); }}
-                  style={{ 
-                    flex: '1', padding: '12px', border: 'none', borderRadius: '6px', fontWeight: '700', fontSize: '0.85rem', cursor: 'pointer',
-                    background: selectedApp.reviewed ? '#f3f4f6' : '#0b63b6',
-                    color: selectedApp.reviewed ? '#475569' : '#ffffff'
-                  }}
+                  style={{ flex: '1', padding: '12px', border: 'none', borderRadius: '6px', fontWeight: '700', fontSize: '0.85rem', cursor: 'pointer', background: selectedApp.reviewed ? '#f3f4f6' : '#0b63b6', color: selectedApp.reviewed ? '#475569' : '#ffffff' }}
                 >
                   {selectedApp.reviewed ? 'Revert to New Action' : 'Mark File as Reviewed'}
                 </button>

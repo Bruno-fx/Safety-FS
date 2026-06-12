@@ -2,6 +2,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useLang } from '../../context/LanguageContext';
 import { useSearchParams } from 'next/navigation';
+import { supabase } from '../../utils/supabase';
 
 function ApplicationForm() {
   const { t } = useLang();
@@ -10,6 +11,7 @@ function ApplicationForm() {
   const [formStep, setFormStep] = useState(1);
   const [status, setStatus] = useState('');
   const [uploadError, setUploadError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
   const [formData, setFormData] = useState({
     fullName: '', idNumber: '', email: '', phone: '', loanType: '', loanAmount: '', collateralDetails: '', projectSummary: ''
@@ -29,6 +31,8 @@ function ApplicationForm() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, reqKey: string) => {
     if (e.target.files && e.target.files[0]) {
+      // NOTE: In a full production app, you would upload this file to Supabase Storage buckets here.
+      // For now, we are storing the filename string to keep the workflow identical.
       setAttachments(prev => ({ ...prev, [reqKey]: e.target.files![0].name }));
       setUploadError('');
     }
@@ -61,25 +65,41 @@ function ApplicationForm() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleFinalSubmit = () => {
-    const existingApps = JSON.parse(localStorage.getItem('loan_applications') || '[]');
+  // 🔥 UPDATED: Now an async function pushing to the global Supabase database
+  const handleFinalSubmit = async () => {
+    setIsSubmitting(true);
     
     const formattedAmount = formData.loanAmount.toLowerCase().includes('rwf') 
       ? formData.loanAmount 
       : `${Number(formData.loanAmount.replace(/[^0-9]/g, '')).toLocaleString()} RWF`;
 
-    const newApplication = { 
-      ...formData, 
-      loanAmount: formattedAmount,
-      uploadedFiles: attachments,
-      id: Date.now(), 
-      status: 'Pending', 
-      date: new Date().toLocaleDateString() 
-    };
+    const { data, error } = await supabase
+      .from('loan_applications')
+      .insert([
+        {
+          fullName: formData.fullName,
+          idNumber: formData.idNumber,
+          phone: formData.phone,
+          email: formData.email,
+          loanType: formData.loanType,
+          loanAmount: formattedAmount,
+          collateralDetails: formData.collateralDetails,
+          projectSummary: formData.projectSummary,
+          uploadedFiles: attachments,
+          reviewed: false
+        }
+      ])
+      .select();
+
+    setIsSubmitting(false);
+
+    if (error) {
+      setUploadError("Database error: Could not submit application.");
+      console.error(error);
+      return;
+    }
     
-    localStorage.setItem('loan_applications', JSON.stringify([...existingApps, newApplication]));
-    
-    setStatus(t('successMsg') + " #" + newApplication.id);
+    setStatus(t('successMsg') + " #" + (data ? data[0].id : 'SYS'));
     setFormStep(1);
     setAttachments({});
     setFormData({ fullName: '', idNumber: '', email: '', phone: '', loanType: (t('loans') as string[])[0], loanAmount: '', collateralDetails: '', projectSummary: '' });
@@ -87,48 +107,24 @@ function ApplicationForm() {
   };
 
   return (
-    <div style={{ 
-      background: 'linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%)', 
-      padding: '60px 5%', 
-      minHeight: '90vh', 
-      boxSizing: 'border-box',
-      position: 'relative',
-      overflow: 'hidden',
-      width: '100%'
-    }}>
-      <div style={{ 
-        maxWidth: '720px', 
-        margin: '0 auto', 
-        background: '#ffffff', 
-        padding: '40px', 
-        borderRadius: '16px', 
-        boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.25)', 
-        position: 'relative',
-        zIndex: 1
-      }}>
+    <div style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%)', padding: '60px 5%', minHeight: '90vh', boxSizing: 'border-box', position: 'relative', overflow: 'hidden', width: '100%' }}>
+      <div style={{ maxWidth: '720px', margin: '0 auto', background: '#ffffff', padding: '40px', borderRadius: '16px', boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.25)', position: 'relative', zIndex: 1 }}>
         
         <div style={{ borderBottom: '2px solid #f1f5f9', paddingBottom: '24px', marginBottom: '30px' }}>
-          <h2 style={{ color: '#0f172a', fontSize: '2rem', fontWeight: '800', margin: '0', letterSpacing: '-0.5px' }}>
-            {t('formTitle')}
-          </h2>
-          <p style={{ color: '#64748b', fontSize: '0.95rem', margin: '8px 0 0 0', lineHeight: '1.5' }}>
-            {t('formSubtitle')}
-          </p>
+          <h2 style={{ color: '#0f172a', fontSize: '2rem', fontWeight: '800', margin: '0', letterSpacing: '-0.5px' }}>{t('formTitle')}</h2>
+          <p style={{ color: '#64748b', fontSize: '0.95rem', margin: '8px 0 0 0', lineHeight: '1.5' }}>{t('formSubtitle')}</p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '35px', position: 'relative', flexWrap: 'wrap', gap: '15px' }}>
           <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: '2px', backgroundColor: '#e2e8f0', zIndex: 1 }}></div>
-          
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#fff', padding: '0 8px', zIndex: 2, position: 'relative' }}>
             <div style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: '#0b63b6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', fontSize: '0.85rem' }}>1</div>
             <span style={{ fontWeight: '700', fontSize: '0.85rem', color: formStep === 1 ? '#0b63b6' : '#64748b' }}>{t('step1')}</span>
           </div>
-
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#fff', padding: '0 8px', zIndex: 2, position: 'relative' }}>
             <div style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: formStep >= 2 ? '#0b63b6' : '#e2e8f0', color: formStep >= 2 ? '#fff' : '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', fontSize: '0.85rem' }}>2</div>
             <span style={{ fontWeight: '700', fontSize: '0.85rem', color: formStep === 2 ? '#0b63b6' : '#64748b' }}>{t('step2')}</span>
           </div>
-
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#fff', padding: '0 8px', zIndex: 2, position: 'relative' }}>
             <div style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: formStep === 3 ? '#f05a28' : '#e2e8f0', color: formStep === 3 ? '#fff' : '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '700', fontSize: '0.85rem' }}>3</div>
             <span style={{ fontWeight: '700', fontSize: '0.85rem', color: formStep === 3 ? '#f05a28' : '#64748b' }}>{t('step3')}</span>
@@ -245,7 +241,9 @@ function ApplicationForm() {
 
             <div style={{ display: 'flex', gap: '14px', marginTop: '10px' }}>
               <button type="button" onClick={() => setFormStep(2)} style={{ background: '#fff', color: '#64748b', padding: '14px', border: '1px solid #cbd5e1', borderRadius: '6px', fontWeight: '700', cursor: 'pointer', flex: '1' }}>{t('btnBack')}</button>
-              <button type="button" onClick={handleFinalSubmit} style={{ background: '#f05a28', color: '#ffffff', padding: '14px', border: 'none', borderRadius: '6px', fontWeight: '700', cursor: 'pointer', flex: '2', boxShadow: '0 4px 14px rgba(240, 90, 40, 0.3)' }}>{t('btnFinalSubmit')}</button>
+              <button type="button" onClick={handleFinalSubmit} disabled={isSubmitting} style={{ background: isSubmitting ? '#cbd5e1' : '#f05a28', color: '#ffffff', padding: '14px', border: 'none', borderRadius: '6px', fontWeight: '700', cursor: isSubmitting ? 'not-allowed' : 'pointer', flex: '2', boxShadow: '0 4px 14px rgba(240, 90, 40, 0.3)' }}>
+                {isSubmitting ? 'Submitting...' : t('btnFinalSubmit')}
+              </button>
             </div>
           </div>
         )}
